@@ -1,0 +1,7 @@
+.idea
+.DS_Store
+/dist.zip
+/node_modules
+!/node_modules/imagemagick
+/dist/*
+!.gitkeep
