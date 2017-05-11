@@ -1,40 +1,3 @@
-/**
- * S3に保存されている画像をリサイズするAWS Lambda関数です。
- * 
- * AWS Lambdaに以下の構成でzipファイルにしてアップロードしてください。
- * /lambda_resizer.js
- * /node_modules/async
- * /node_modules/imagemagick
- *
- * ランタイム - Node.js 6.x 
- * イベントハンドラ - lambda_resizer.handler
- * 
- * Amazon API Gatewayからプロキシ統合してください。
- * この関数は以下のルールに基づいて必ず画像を返却します。
- *
- * URL
- * UUID/フォーマット
- * - UUID (required)
- * - フォーマット (optional) (fit|fill).(width)x(height).(extension).(color)
- *
- * 画像返却ルール
- * - リサイズ画像を保存するS3バケットに既にリサイズされている画像がある場合は、HTTPステータス304と共にその画像を返します。
- * - S3に画像がある場合は、リサイズを実行し、成功した場合はリサイズ用のS3バケットに保存し、HTTPステータス200と共にその画像を返します。
- * - 上記以外の場合は、HTTPステータス404を返します。
- *
- * リサイズルール
- * - 縦横指定
- *
- * Require environments
- * TEMP_DIR - リサイズ時の一時ファイルの保存場所lambdaの場合は/tmp/
- * BUCKET_ORIGINAL - 元画像のあるバケット名
- * BUCKET_CACHE - リサイズした画像を保存するバケット名
- * KEY_ORIGINAL - 元画像のファイルまでのキー名
- * KEY_CACHE - リサイズした画像を保存するファイルまでのキー名
- *
- * Require event parameters
- * filename - 要求する画像のファイル名/要求する画像のフォーマット
- */
 'use strict';
 
 const fs = require('fs');
@@ -74,7 +37,7 @@ exports.handler = (event, context, callback) => {
 			if (err) {
 				callback(err);
 			} else {
-				callback(null, response.Body, response.ContentType);
+				callback(null, response.Body, response.ContentType, response);
 			}
 		});
 	};
@@ -222,13 +185,18 @@ exports.handler = (event, context, callback) => {
 				download({
 					'Bucket': bucket.original,
 					'Key': keyPrefix.original + originalPath
-				}, (err, body, contentType) => {
+				}, (err, body, contentType, response) => {
 					if (err) {
 						// オリジナル画像なし
 						callback(new NotFoundException());
 					} else {
-						// オリジナル画像あり
-						callback(null, body, contentType);
+						if ( response.Metadata.deleted ) {
+							// 削除済み
+							callback(new DeletedException());
+						} else {
+							// オリジナル画像あり
+							callback(null, body, contentType);
+						}
 					}
 				});
 			},
@@ -316,6 +284,9 @@ class ResizeStyle {
 	static get separator() {
 		return '.';
 	}
+	static get maxDimension() {
+		return 2048;
+	}
 
 	constructor(params) {
 		let arr = [];
@@ -341,6 +312,12 @@ class ResizeStyle {
 			this.canvas_h_string = canvas[1] || '';
 			this.canvas_w = this.canvas_w_string || 0;
 			this.canvas_h = this.canvas_h_string || 0;
+			
+			if ( this.canvas_w > ResizeStyle.maxDimension || this.canvas_h > ResizeStyle.maxDimension) {
+				this.enable = false;
+				return;
+			}
+			
 			// image type
 			if (/^(jpg|png|gif|)$/i.test(arr[2])) {
 				this.format = arr[2];
@@ -501,6 +478,12 @@ class ResizeFailedException {
 class ConvertFailedException {
 	constructor() {
 		this.message = 'Convert Failed Exception';
+	}
+}
+
+class DeletedException {
+	constructor() {
+		this.message = 'Deleted Exception';
 	}
 }
 
